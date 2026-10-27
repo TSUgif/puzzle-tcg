@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import {
   ArrowDownToLine,
   ArrowLeftRight,
@@ -512,7 +512,7 @@ export default function TacticalGame() {
     setHandoff(false)
   }
 
-  const handSummary = useMemo(() => activePlayer.hand.length, [activePlayer.hand.length])
+  const handSummary = activePlayer.hand.length
   const opponent = game.players[opponentId]
 
   return (
