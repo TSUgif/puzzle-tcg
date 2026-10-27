@@ -404,26 +404,26 @@ export default function TacticalGame() {
       if (current.winner !== null) return current
       const defenderId = (1 - current.active) as PlayerId
       const attackerPower = getPower(current, current.active, lane, 'frontline')
-      const defender = current.players[defenderId].frontline[lane]
-      const defenderActive = defender ? meetsNeed(defender, analyzeField(current.players[defenderId]).counts) : false
-      const defenderPower = defenderActive ? getPower(current, defenderId, lane, 'frontline') : 0
+      const defenderPlayer = current.players[defenderId]
+      const targetStage = defenderPlayer.frontline[lane] ? 'frontline' : defenderPlayer.deployment[lane] ? 'deployment' : null
+      const defender = targetStage ? defenderPlayer[targetStage][lane] : null
+      const defenderActive = defender ? meetsNeed(defender, analyzeField(defenderPlayer).counts) : false
+      const defenderPower = defenderActive && targetStage ? getPower(current, defenderId, lane, targetStage) : 0
       const players = clonePlayers(current.players)
       const atk = players[current.active]
       const def = players[defenderId]
       const attackingCard = atk.frontline[lane]
       if (!attackingCard || attackerPower <= 0 || current.attacked.includes(attackingCard.id)) return current
       const next: GameState = { ...current, players, attacked: [...current.attacked, attackingCard.id] }
-      if (defender) {
+      if (defender && targetStage) {
         if (!defenderActive || attackerPower >= defenderPower) {
-          def.frontline[lane] = null
+          def[targetStage][lane] = null
           def.discard.push(defender)
         }
         if (defenderActive && attackerPower < defenderPower) {
           atk.frontline[lane] = null
           atk.discard.push(attackingCard)
         }
-      } else if (def.deployment[lane]) {
-        return next
       } else if (def.shields[lane]) {
         const broken = def.shields[lane] as Card
         def.shields[lane] = null
@@ -545,6 +545,7 @@ export default function TacticalGame() {
             <ul>
               <li>手札 → 出撃枠で配置。2体目から手札1枚破棄</li>
               <li>最前線を選んで <Swords aria-hidden="true" /> で攻撃</li>
+              <li>攻撃は最前線 → 出撃 → シールドの順に、いる段へ届く</li>
               <li>端の図形パーツを隣・上下でつなぐと図形完成。<ShapeMark shape="star" />は4枚の角で完成</li>
               <li>カード中央の図形が場で揃うと起動し、パワーが出る</li>
               <li>未起動カードは必ず破壊。同値なら攻撃側の勝ち</li>
