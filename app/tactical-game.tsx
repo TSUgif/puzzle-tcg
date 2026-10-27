@@ -5,15 +5,20 @@ import { ArrowDownToLine, ChevronRight, CircleHelp, Layers3, RotateCcw, Shield, 
 
 type PlayerId = 0 | 1
 type Shape = 'circle' | 'star' | 'diamond'
-type Ports = { north: Shape | null; east: Shape | null; south: Shape | null; west: Shape | null }
+type EdgeShape = 'circle' | 'diamond'
+type Edge = 'north' | 'east' | 'south' | 'west'
+type Corner = 'nw' | 'ne' | 'sw' | 'se'
+type Need = Partial<Record<Shape, number>>
 type Card = {
   id: string
-  name: string
-  basePower: number
-  ports: Ports
+  edges: Partial<Record<Edge, EdgeShape>>
+  corners: Partial<Record<Corner, 'star'>>
+  need: Need
+  power: number
   owner: PlayerId
   accent: 'coral' | 'teal' | 'gold' | 'violet'
 }
+type FieldAnalysis = { counts: Record<Shape, number>; linked: Set<string> }
 type PlayerState = {
   hand: Card[]
   deck: Card[]
@@ -33,11 +38,21 @@ type GameState = {
 type PendingDeployment = { cardId: string; lane: number } | null
 type RowKey = 'frontline' | 'deployment' | 'shield'
 
-const shapeBonus: Record<Shape, number> = { circle: 10, star: 50, diamond: 25 }
-const shapeLabel: Record<Shape, string> = { circle: '円', star: '星', diamond: '菱' }
-const shapeSequence: Shape[] = ['circle', 'star', 'diamond', 'circle', 'diamond', 'star']
-const cardNames = ['ルミナ', 'スパーク', 'ノヴァ', 'オービット', 'シグナル', 'ミラージュ', 'アストラ', 'コメット', 'エコー', 'プリズム']
+const shapeLabel: Record<Shape, string> = { circle: '丸', star: '星', diamond: 'ダイヤ' }
+const shapeOrder: Shape[] = ['circle', 'diamond', 'star']
+const edgeShapes: EdgeShape[] = ['circle', 'diamond']
+const cornerKeys: Corner[] = ['nw', 'ne', 'sw', 'se']
+const conditions: { need: Need; power: number }[] = [
+  { need: { circle: 1 }, power: 20 },
+  { need: { diamond: 1 }, power: 30 },
+  { need: { circle: 2 }, power: 50 },
+  { need: { circle: 1, diamond: 1 }, power: 60 },
+  { need: { diamond: 2 }, power: 70 },
+  { need: { star: 1 }, power: 90 },
+]
 const accents: Card['accent'][] = ['coral', 'teal', 'gold', 'violet']
+const edgePoint: Record<Edge, [number, number]> = { north: [31.5, 0], east: [63, 44], south: [31.5, 88], west: [0, 44] }
+const cornerPoint: Record<Corner, [number, number]> = { nw: [0, 0], ne: [63, 0], sw: [0, 88], se: [63, 88] }
 
 function shuffled<T>(items: T[], seed: number) {
   const result = [...items]
@@ -51,22 +66,72 @@ function shuffled<T>(items: T[], seed: number) {
 }
 
 function makeDeck(owner: PlayerId): Card[] {
+  let seed = 9173 + owner * 7919
+  const rand = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0
+    return seed / 4294967296
+  }
+  const pick = <T,>(items: T[]) => items[Math.floor(rand() * items.length)]
   return Array.from({ length: 20 }, (_, index) => {
-    const shift = (index + owner * 2) % shapeSequence.length
+    const edges: Card['edges'] = { north: pick(edgeShapes), south: pick(edgeShapes) }
+    if (rand() < 0.55) edges.east = pick(edgeShapes)
+    if (rand() < 0.55) edges.west = pick(edgeShapes)
+    const corners: Card['corners'] = {}
+    for (const corner of cornerKeys) if (rand() < 0.4) corners[corner] = 'star'
+    const condition = conditions[(index + owner) % conditions.length]
     return {
       id: `p${owner + 1}-${String(index + 1).padStart(2, '0')}`,
-      name: cardNames[(index + owner * 3) % cardNames.length],
-      basePower: 30 + ((index * 13 + owner * 7) % 5) * 10,
-      ports: {
-        north: shapeSequence[shift],
-        east: index % 4 === 0 ? shapeSequence[(shift + 2) % shapeSequence.length] : null,
-        south: shapeSequence[(shift + 1 + (index % 3 === 0 ? 1 : 0)) % shapeSequence.length],
-        west: index % 5 === 0 ? shapeSequence[(shift + 3) % shapeSequence.length] : null,
-      },
+      edges,
+      corners,
+      need: condition.need,
+      power: condition.power,
       owner,
       accent: accents[(index + owner) % accents.length],
     }
   })
+}
+
+function analyzeField(player: PlayerState): FieldAnalysis {
+  const counts: Record<Shape, number> = { circle: 0, diamond: 0, star: 0 }
+  const linked = new Set<string>()
+  const { frontline: front, deployment: deploy } = player
+  for (const row of [front, deploy]) {
+    for (let lane = 0; lane < 3; lane += 1) {
+      const left = row[lane]
+      const right = row[lane + 1]
+      if (left?.edges.east && left.edges.east === right?.edges.west) {
+        counts[left.edges.east] += 1
+        linked.add(`${left.id}:east`)
+        linked.add(`${right.id}:west`)
+      }
+    }
+  }
+  for (let lane = 0; lane < 4; lane += 1) {
+    const top = front[lane]
+    const bottom = deploy[lane]
+    if (top?.edges.south && top.edges.south === bottom?.edges.north) {
+      counts[top.edges.south] += 1
+      linked.add(`${top.id}:south`)
+      linked.add(`${bottom.id}:north`)
+    }
+  }
+  for (let lane = 0; lane < 3; lane += 1) {
+    const quad = [
+      [front[lane], 'se'],
+      [front[lane + 1], 'sw'],
+      [deploy[lane], 'ne'],
+      [deploy[lane + 1], 'nw'],
+    ] as const
+    if (quad.every(([card, corner]) => card?.corners[corner] === 'star')) {
+      counts.star += 1
+      for (const [card, corner] of quad) linked.add(`${card?.id}:${corner}`)
+    }
+  }
+  return { counts, linked }
+}
+
+function meetsNeed(card: Card, counts: Record<Shape, number>) {
+  return shapeOrder.every((shape) => counts[shape] >= (card.need[shape] ?? 0))
 }
 
 function createPlayerState(owner: PlayerId): PlayerState {
@@ -102,64 +167,74 @@ function getPower(game: GameState, playerId: PlayerId, lane: number, stage: 'fro
   const row = stage === 'frontline' ? player.frontline : player.deployment
   const card = row[lane]
   if (!card) return 0
-  const links: Shape[] = []
-  for (const neighborLane of [lane - 1, lane + 1]) {
-    if (neighborLane < 0 || neighborLane > 3) continue
-    const other = row[neighborLane]
-    if (!other) continue
-    const shape = neighborLane < lane
-      ? card.ports.west && card.ports.west === other.ports.east ? card.ports.west : null
-      : card.ports.east && card.ports.east === other.ports.west ? card.ports.east : null
-    if (shape) links.push(shape)
-  }
-  const adjacent = (stage === 'frontline' ? player.deployment : player.frontline)[lane]
-  if (adjacent) {
-    const shape = stage === 'frontline'
-      ? card.ports.south && card.ports.south === adjacent.ports.north ? card.ports.south : null
-      : card.ports.north && card.ports.north === adjacent.ports.south ? card.ports.north : null
-    if (shape) links.push(shape)
-  }
-  const distinct = new Set(links)
-  const synergy = distinct.has('circle') && distinct.has('diamond') ? 50 : 0
-  return card.basePower + links.reduce((sum, shape) => sum + shapeBonus[shape], 0) + synergy
+  return meetsNeed(card, analyzeField(player).counts) ? card.power : 0
+}
+
+function ShapePath({ shape, cx, cy, r }: { shape: Shape; cx: number; cy: number; r: number }) {
+  if (shape === 'circle') return <circle cx={cx} cy={cy} r={r} />
+  if (shape === 'diamond') return <polygon points={`${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`} />
+  const points = Array.from({ length: 10 }, (_, i) => {
+    const radius = i % 2 === 0 ? r : r * 0.45
+    const angle = (Math.PI / 5) * i - Math.PI / 2
+    return `${(cx + radius * Math.cos(angle)).toFixed(2)},${(cy + radius * Math.sin(angle)).toFixed(2)}`
+  }).join(' ')
+  return <polygon points={points} />
 }
 
 function ShapeMark({ shape }: { shape: Shape }) {
   return (
-    <svg viewBox="0 0 24 24" className={`shape-mark shape-mark-${shape}`} aria-hidden="true">
-      {shape === 'circle' && <circle cx="12" cy="12" r="8" />}
-      {shape === 'star' && <polygon points="12,3 14.7,8.4 20.7,9.2 16.3,13.4 17.4,19.4 12,16.6 6.6,19.4 7.7,13.4 3.3,9.2 9.3,8.4" />}
-      {shape === 'diamond' && <polygon points="12,3 21,12 12,21 3,12" />}
+    <svg viewBox="0 0 24 24" className={`shape-mark shape-${shape}`} aria-hidden="true">
+      <ShapePath shape={shape} cx={12} cy={12} r={shape === 'circle' ? 8 : 9.5} />
     </svg>
+  )
+}
+
+function NeedIcons({ need }: { need: Need }) {
+  return (
+    <span className="card-need">
+      {shapeOrder.flatMap((shape) => Array.from({ length: need[shape] ?? 0 }, (_, i) => <ShapeMark key={`${shape}-${i}`} shape={shape} />))}
+    </span>
   )
 }
 
 function CardFace({
   card,
-  power,
+  active = false,
+  linked,
   selected = false,
   dimmed = false,
   danger = false,
   onClick,
 }: {
   card: Card
-  power?: number
+  active?: boolean
+  linked?: Set<string>
   selected?: boolean
   dimmed?: boolean
   danger?: boolean
   onClick?: () => void
 }) {
-  const value = power ?? card.basePower
-  const className = ['tcg-card', `accent-${card.accent}`, selected && 'is-selected', dimmed && 'is-dimmed', danger && 'is-danger'].filter(Boolean).join(' ')
-  const ports = (['north', 'east', 'south', 'west'] as const).map((side) => {
-    const shape = card.ports[side]
-    return shape ? <span key={side} className={`port port-${side} port-${shape}`}><ShapeMark shape={shape} /></span> : null
-  })
-  const label = `${card.name} ${value}${(['north', 'east', 'south', 'west'] as const).map((side) => card.ports[side] ? ` ${shapeLabel[card.ports[side] as Shape]}` : '').join('')}`
+  const className = ['tcg-card', `accent-${card.accent}`, active && 'is-active', selected && 'is-selected', dimmed && 'is-dimmed', danger && 'is-danger'].filter(Boolean).join(' ')
+  const needText = shapeOrder.filter((shape) => card.need[shape]).map((shape) => `${shapeLabel[shape]}${card.need[shape]}`).join('・')
+  const label = `${active ? `パワー${card.power}` : `待機（${needText}完成でパワー${card.power}）`}`
   const body = (
     <>
-      {ports}
-      <span className="card-power">{value}</span>
+      <svg className="card-parts" viewBox="0 0 63 88" aria-hidden="true">
+        {(Object.entries(card.edges) as [Edge, EdgeShape][]).map(([edge, shape]) => (
+          <g key={edge} className={`part shape-${shape} ${linked?.has(`${card.id}:${edge}`) ? 'is-linked' : ''}`}>
+            <ShapePath shape={shape} cx={edgePoint[edge][0]} cy={edgePoint[edge][1]} r={shape === 'circle' ? 10 : 12} />
+          </g>
+        ))}
+        {(Object.keys(card.corners) as Corner[]).map((corner) => (
+          <g key={corner} className={`part shape-star ${linked?.has(`${card.id}:${corner}`) ? 'is-linked' : ''}`}>
+            <ShapePath shape="star" cx={cornerPoint[corner][0]} cy={cornerPoint[corner][1]} r={17} />
+          </g>
+        ))}
+      </svg>
+      <span className="card-core">
+        <NeedIcons need={card.need} />
+        <span className="card-power">{card.power}</span>
+      </span>
       {danger && <Trash2 className="card-trash" aria-hidden="true" />}
     </>
   )
@@ -196,6 +271,7 @@ function FieldBoard({
   pendingDeployment?: PendingDeployment
 }) {
   const player = game.players[playerId]
+  const analysis = analyzeField(player)
   const rows: RowKey[] = opponent ? ['shield', 'deployment', 'frontline'] : ['frontline', 'deployment', 'shield']
   const rowCards = { frontline: player.frontline, deployment: player.deployment, shield: player.shields }
   const rowName = { frontline: '最前線', deployment: '出撃', shield: 'シールド' }
@@ -210,21 +286,21 @@ function FieldBoard({
             if (row === 'shield') {
               content = card ? <ShieldBack /> : <span className="slot" aria-label="空き" />
             } else if (card) {
-              const stage = row === 'frontline' ? 'frontline' : 'deployment'
-              const power = getPower(game, playerId, lane, stage)
+              const active = meetsNeed(card, analysis.counts)
               if (row === 'frontline') {
-                const canSelect = !opponent && game.winner === null && Boolean(onSelectAttacker)
+                const canSelect = !opponent && game.winner === null && Boolean(onSelectAttacker) && active
                 content = (
                   <CardFace
                     card={card}
-                    power={power}
+                    active={active}
+                    linked={analysis.linked}
                     selected={selectedAttacker === card.id}
                     dimmed={!opponent && game.attacked.includes(card.id)}
                     onClick={canSelect ? () => onSelectAttacker?.(card) : undefined}
                   />
                 )
               } else {
-                content = <CardFace card={card} power={power} selected={isPending} onClick={canDeploy ? () => onDeploy?.(lane) : undefined} />
+                content = <CardFace card={card} active={active} linked={analysis.linked} selected={isPending} onClick={canDeploy ? () => onDeploy?.(lane) : undefined} />
               }
             } else if (canDeploy) {
               content = (
@@ -264,7 +340,8 @@ export default function TacticalGame() {
   const opponent = game.players[opponentId]
   const selectedCard = activePlayer.hand.find((card) => card.id === selectedCardId) ?? null
   const selectedAttackCard = activePlayer.frontline.find((card) => card?.id === selectedAttacker) ?? null
-  const canAttack = Boolean(selectedAttackCard) && !game.attacked.includes(selectedAttacker ?? '') && game.winner === null
+  const selectedAttackActive = Boolean(selectedAttackCard) && meetsNeed(selectedAttackCard as Card, analyzeField(activePlayer).counts)
+  const canAttack = selectedAttackActive && !game.attacked.includes(selectedAttacker ?? '') && game.winner === null
 
   const clearSelection = () => {
     setSelectedCardId(null)
@@ -333,7 +410,7 @@ export default function TacticalGame() {
       const atk = players[current.active]
       const def = players[defenderId]
       const attackingCard = atk.frontline[lane]
-      if (!attackingCard || current.attacked.includes(attackingCard.id)) return current
+      if (!attackingCard || attackerPower <= 0 || current.attacked.includes(attackingCard.id)) return current
       const next: GameState = { ...current, players, attacked: [...current.attacked, attackingCard.id] }
       if (defender) {
         if (attackerPower >= defenderPower) {
@@ -465,7 +542,8 @@ export default function TacticalGame() {
             <ul>
               <li>手札 → 出撃枠で配置。2体目から手札1枚破棄</li>
               <li>最前線を選んで <Swords aria-hidden="true" /> で攻撃</li>
-              <li>図形一致で強化 <ShapeMark shape="circle" />+10 <ShapeMark shape="diamond" />+25 <ShapeMark shape="star" />+50</li>
+              <li>端の図形パーツを隣・上下でつなぐと図形完成。<ShapeMark shape="star" />は4枚の角で完成</li>
+              <li>カード中央の図形が場で揃うと起動し、パワーが出る</li>
               <li>破壊されたシールドは持ち主の手札へ</li>
               <li>空レーンを攻撃で勝利</li>
             </ul>
