@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, type ReactNode } from 'react'
-import { ArrowDownToLine, ChevronRight, CircleHelp, Layers3, RotateCcw, Shield, Swords, Trash2, X } from 'lucide-react'
+import { ArrowDownToLine, ChevronRight, CircleHelp, Layers3, RotateCcw, Shield, Skull, Swords, Trash2, X } from 'lucide-react'
 
 type PlayerId = 0 | 1
 type Shape = 'circle' | 'star' | 'diamond'
@@ -405,7 +405,8 @@ export default function TacticalGame() {
       const defenderId = (1 - current.active) as PlayerId
       const attackerPower = getPower(current, current.active, lane, 'frontline')
       const defender = current.players[defenderId].frontline[lane]
-      const defenderPower = defender ? getPower(current, defenderId, lane, 'frontline') : 0
+      const defenderActive = defender ? meetsNeed(defender, analyzeField(current.players[defenderId]).counts) : false
+      const defenderPower = defenderActive ? getPower(current, defenderId, lane, 'frontline') : 0
       const players = clonePlayers(current.players)
       const atk = players[current.active]
       const def = players[defenderId]
@@ -413,11 +414,11 @@ export default function TacticalGame() {
       if (!attackingCard || attackerPower <= 0 || current.attacked.includes(attackingCard.id)) return current
       const next: GameState = { ...current, players, attacked: [...current.attacked, attackingCard.id] }
       if (defender) {
-        if (attackerPower >= defenderPower) {
+        if (!defenderActive || attackerPower >= defenderPower) {
           def.frontline[lane] = null
           def.discard.push(defender)
         }
-        if (attackerPower <= defenderPower) {
+        if (defenderActive && attackerPower < defenderPower) {
           atk.frontline[lane] = null
           atk.discard.push(attackingCard)
         }
@@ -464,6 +465,7 @@ export default function TacticalGame() {
         <span className={`player-chip player-chip-${opponentId}`} aria-label={`相手 P${opponentId + 1}`}>P{opponentId + 1}</span>
         <Counter icon={Layers3} value={opponent.hand.length} label="相手の手札" />
         <Counter icon={ArrowDownToLine} value={opponent.deck.length} label="相手の山札" />
+        <Counter icon={Skull} value={opponent.discard.length} label="相手の墓地" />
         <div className="top-actions">
           <button type="button" className="icon-button" aria-label="遊び方" onClick={() => setHelpOpen(true)}><CircleHelp aria-hidden="true" /></button>
           <button type="button" className="icon-button" aria-label="リセット" onClick={resetGame}><RotateCcw aria-hidden="true" /></button>
@@ -507,6 +509,7 @@ export default function TacticalGame() {
       <nav className="dock" aria-label="操作">
         <span className={`player-chip player-chip-${game.active}`} aria-label={`手番 P${game.active + 1}`}>P{game.active + 1}</span>
         <Counter icon={ArrowDownToLine} value={activePlayer.deck.length} label="山札" />
+        <Counter icon={Skull} value={activePlayer.discard.length} label="墓地" />
         <button type="button" className="dock-button attack-button" onClick={attack} disabled={!canAttack || handoff} aria-label="攻撃">
           <Swords aria-hidden="true" />
         </button>
@@ -544,7 +547,8 @@ export default function TacticalGame() {
               <li>最前線を選んで <Swords aria-hidden="true" /> で攻撃</li>
               <li>端の図形パーツを隣・上下でつなぐと図形完成。<ShapeMark shape="star" />は4枚の角で完成</li>
               <li>カード中央の図形が場で揃うと起動し、パワーが出る</li>
-              <li>破壊されたシールドは持ち主の手札へ</li>
+              <li>未起動カードは必ず破壊。同値なら攻撃側の勝ち</li>
+              <li>破壊されたカードは墓地へ。シールドは持ち主の手札へ</li>
               <li>空レーンを攻撃で勝利</li>
             </ul>
           </div>
