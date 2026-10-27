@@ -198,3 +198,10 @@ button.tcg-card:active { transform: scale(.96); }
 .help-card li svg { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; }
 .help-close { position: absolute; top: 8px; right: 8px; display: grid; width: 44px; height: 44px; place-items: center; border: 0; background: transparent; color: #c5d0c9; cursor: pointer; }
 .help-close svg { width: 18px; height: 18px; }
+
+.final-counts {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+}

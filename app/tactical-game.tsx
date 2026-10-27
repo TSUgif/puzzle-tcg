@@ -33,7 +33,8 @@ type GameState = {
   turn: number
   summonsThisTurn: number
   attacked: string[]
-  winner: PlayerId | null
+  winner: PlayerId | 'draw' | null
+  finalCounts: [number, number] | null
 }
 type PendingDeployment = { cardId: string; lane: number } | null
 type RowKey = 'frontline' | 'deployment' | 'shield'
@@ -134,12 +135,22 @@ function meetsNeed(card: Card, counts: Record<Shape, number>) {
   return shapeOrder.every((shape) => counts[shape] >= (card.need[shape] ?? 0))
 }
 
+const DECK_SIZE = 20
+const SHIELD_COUNT = 4
+const HAND_COUNT = 4
+
+function fieldCardCount(player: PlayerState) {
+  return [...player.frontline, ...player.deployment].filter(Boolean).length
+}
+
 function createPlayerState(owner: PlayerId): PlayerState {
-  const cards = shuffled(makeDeck(owner), 20261027 + owner * 571)
+  const deck = shuffled(makeDeck(owner), Date.now() + owner * 571).slice(0, DECK_SIZE)
+  const shields = deck.splice(0, SHIELD_COUNT)
+  const hand = deck.splice(0, HAND_COUNT)
   return {
-    shields: cards.slice(0, 4),
-    hand: cards.slice(4, 8),
-    deck: cards.slice(8),
+    shields,
+    hand,
+    deck,
     frontline: Array<Card | null>(4).fill(null),
     deployment: Array<Card | null>(4).fill(null),
     discard: [],
@@ -147,7 +158,7 @@ function createPlayerState(owner: PlayerId): PlayerState {
 }
 
 function createInitialGame(): GameState {
-  return { players: [createPlayerState(0), createPlayerState(1)], active: 0, turn: 1, summonsThisTurn: 0, attacked: [], winner: null }
+  return { players: [createPlayerState(0), createPlayerState(1)], active: 0, turn: 1, summonsThisTurn: 0, attacked: [], winner: null, finalCounts: null }
 }
 
 function clonePlayers(players: [PlayerState, PlayerState]) {
@@ -445,6 +456,11 @@ export default function TacticalGame() {
       const nextPlayer = players[nextId]
       const drawn = nextPlayer.deck.shift()
       if (drawn) nextPlayer.hand.push(drawn)
+      if (players.some((item) => item.deck.length === 0)) {
+        const finalCounts: [number, number] = [fieldCardCount(players[0]), fieldCardCount(players[1])]
+        const winner: GameState['winner'] = finalCounts[0] === finalCounts[1] ? 'draw' : finalCounts[0] > finalCounts[1] ? 0 : 1
+        return { ...current, players, winner, finalCounts }
+      }
       return { ...current, players, active: nextId, turn: current.turn + 1, summonsThisTurn: 0, attacked: [] }
     })
     clearSelection()
@@ -519,10 +535,19 @@ export default function TacticalGame() {
       </nav>
 
       {game.winner !== null && (
-        <div className="overlay" role="dialog" aria-modal="true" aria-label={`P${game.winner + 1} 勝利`}>
+        <div className="overlay" role="dialog" aria-modal="true" aria-label={game.winner === 'draw' ? '引き分け' : `P${game.winner + 1} 勝利`}>
           <div className="overlay-card">
-            <span className={`player-chip player-chip-${game.winner} player-chip-large`}>P{game.winner + 1}</span>
-            <strong className="overlay-title">WIN</strong>
+            {game.winner !== 'draw' && (
+              <span className={`player-chip player-chip-${game.winner} player-chip-large`}>P{game.winner + 1}</span>
+            )}
+            <strong className="overlay-title">{game.winner === 'draw' ? 'DRAW' : 'WIN'}</strong>
+            {game.finalCounts && (
+              <div className="final-counts" aria-label={`場のカード P1 ${game.finalCounts[0]}枚 P2 ${game.finalCounts[1]}枚`}>
+                <span className="player-chip player-chip-0">{game.finalCounts[0]}</span>
+                <span aria-hidden="true">:</span>
+                <span className="player-chip player-chip-1">{game.finalCounts[1]}</span>
+              </div>
+            )}
             <button type="button" className="overlay-button" onClick={resetGame} aria-label="もう一度"><RotateCcw aria-hidden="true" /></button>
           </div>
         </div>
@@ -546,6 +571,7 @@ export default function TacticalGame() {
               <li>手札 → 出撃枠で配置。2体目から手札1枚破棄</li>
               <li>最前線を選んで <Swords aria-hidden="true" /> で攻撃</li>
               <li>攻撃は最前線 → 出撃 → シールドの順に、いる段へ届く</li>
+              <li>どちらかの山札が0枚で終了。場のカードが多い方の勝ち</li>
               <li>端の図形パーツを隣・上下でつなぐと図形完成。<ShapeMark shape="star" />は4枚の角で完成</li>
               <li>カード中央の図形が場で揃うと起動し、パワーが出る</li>
               <li>未起動カードは必ず破壊。同値なら攻撃側の勝ち</li>
